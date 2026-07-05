@@ -467,4 +467,158 @@ Return ONLY this exact JSON structure, no markdown:
                     body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
                 });
                 const data = await res.json();
-  
+
+                const rawText = data.candidates[0].content.parts[0].text;
+                const cleanText = rawText.replace(/```json|```/g, '').trim();
+                const parsed = JSON.parse(cleanText);
+
+                state.clips = parsed.clips;
+                state.currentClipIdx = 0;
+                saveToHistory(state.title, state.videoId, parsed.clips.length);
+
+                renderClipTabs();
+                renderActiveClip();
+                showScreen('results');
+            } catch (e) {
+                console.error(e);
+                alert("Failed to analyze clips. Check your Gemini key and try again.");
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '✂️ FIND VIRAL CLIPS';
+            }
+        }
+
+        function renderClipTabs() {
+            const container = document.getElementById('clip-tabs-container');
+            container.innerHTML = state.clips.map((c, i) => `
+                <div class="clip-tab ${i === state.currentClipIdx ? 'active' : ''}" onclick="selectClip(${i})">
+                    CLIP ${i + 1}<br>${c.platform}<br>⭐${c.viralScore}/10
+                </div>
+            `).join('');
+        }
+
+        function selectClip(idx) {
+            state.currentClipIdx = idx;
+            renderClipTabs();
+            renderActiveClip();
+        }
+
+        function renderActiveClip() {
+            const clip = state.clips[state.currentClipIdx];
+            const container = document.getElementById('active-clip-content');
+            container.innerHTML = `
+                <div class="clip-card">
+                    <div class="clip-header">
+                        <span class="pill active">${clip.platform}</span>
+                        <span class="pill">${clip.emotion}</span>
+                        <span class="pill">${clip.trigger}</span>
+                        <span class="pill">⭐ ${clip.viralScore}/10</span>
+                    </div>
+                    <span class="big-ts">${clip.segment.timestamp}</span>
+                    <div class="box">
+                        <strong>${clip.hookText}</strong><br>
+                        <span style="color:#888;font-size:0.8rem">${clip.subHook}</span>
+                    </div>
+                    <p style="font-size:0.85rem;color:#aaa">${clip.whyViral}</p>
+
+                    <div class="sub-tabs">
+                        <div class="sub-tab active" onclick="showTab(this,'script-${clip.id}')">SCRIPT</div>
+                        <div class="sub-tab" onclick="showTab(this,'captions-${clip.id}')">CAPTIONS</div>
+                        <div class="sub-tab" onclick="showTab(this,'caption-${clip.id}')">POST CAPTION</div>
+                        <div class="sub-tab" onclick="showTab(this,'capcut-${clip.id}')">CAPCUT</div>
+                    </div>
+
+                    <div id="script-${clip.id}" class="tab-content active">
+                        <pre>${clip.segment.text}</pre>
+                        <button class="btn btn-secondary" onclick='copyText(${JSON.stringify(clip.segment.text)})'>📋 COPY SCRIPT</button>
+                    </div>
+                    <div id="captions-${clip.id}" class="tab-content">
+                        <pre>${clip.captions.join('\n')}</pre>
+                        <button class="btn btn-secondary" onclick='copyText(${JSON.stringify(clip.captions.join("\n"))})'>📋 COPY CAPTIONS</button>
+                    </div>
+                    <div id="caption-${clip.id}" class="tab-content">
+                        <pre>${clip.instagramCaption}\n\n${clip.hashtags.map(h => '#' + h).join(' ')}</pre>
+                        <button class="btn btn-secondary" onclick='copyText(${JSON.stringify(clip.instagramCaption + " " + clip.hashtags.map(h => "#" + h).join(" "))})'>📋 COPY CAPTION</button>
+                    </div>
+                    <div id="capcut-${clip.id}" class="tab-content">
+                        <pre>${clip.capcut}</pre>
+                    </div>
+
+                    <p style="font-size:0.75rem;color:#888;margin-top:15px">📅 Best post time: ${clip.bestPostTime}<br>💡 ${clip.platformTip}</p>
+
+                    <button class="btn btn-primary" onclick="generateClip(${state.currentClipIdx})" id="gen-btn-${clip.id}">🎬 GENERATE CLIP VIDEO</button>
+                    <div id="clip-output-${clip.id}"></div>
+                </div>
+            `;
+        }
+
+        function showTab(el, id) {
+            const parent = el.closest('.clip-card');
+            parent.querySelectorAll('.sub-tab').forEach(t => t.classList.remove('active'));
+            parent.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+            el.classList.add('active');
+            document.getElementById(id).classList.add('active');
+        }
+
+        async function generateClip(idx) {
+            const clip = state.clips[idx];
+            const btn = document.getElementById(`gen-btn-${clip.id}`);
+            const output = document.getElementById(`clip-output-${clip.id}`);
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> RENDERING...';
+            output.innerHTML = '<div class="progress-container"><div class="progress-fill" style="width:40%"></div></div>';
+
+            try {
+                const supadataKey = localStorage.getItem('supadata_key');
+                const res = await fetch(`${BACKEND_URL}/process`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: document.getElementById('yt-url').value,
+                        startSeconds: clip.segment.startSeconds,
+                        endSeconds: clip.segment.endSeconds,
+                        captions: clip.captions,
+                        supadataKey
+                    })
+                });
+                const data = await res.json();
+                if (data.success && data.videoUrl) {
+                    output.innerHTML = `
+                        <div class="box">
+                            ✅ Clip ready!<br>
+                            <a href="${data.videoUrl}" download style="color:var(--accent)">⬇️ DOWNLOAD VIDEO</a>
+                        </div>`;
+                } else {
+                    output.innerHTML = `<div class="box" style="color:#ff4444">❌ ${data.error || 'Generation failed'}</div>`;
+                }
+            } catch (e) {
+                output.innerHTML = `<div class="box" style="color:#ff4444">❌ Connection failed to backend</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '🎬 GENERATE CLIP VIDEO';
+            }
+        }
+
+        function saveToHistory(title, videoId, clipCount) {
+            const history = JSON.parse(localStorage.getItem('clip_history') || '[]');
+            history.unshift({ title, videoId, clipCount, date: new Date().toISOString() });
+            localStorage.setItem('clip_history', JSON.stringify(history.slice(0, 20)));
+        }
+
+        function renderHistory() {
+            const history = JSON.parse(localStorage.getItem('clip_history') || '[]');
+            const list = document.getElementById('history-list');
+            if (history.length === 0) {
+                list.innerHTML = '<p style="color:#888">No history yet</p>';
+                return;
+            }
+            list.innerHTML = history.map(h => `
+                <div class="box">
+                    <strong>${h.title}</strong><br>
+                    <span style="font-size:0.75rem;color:#888">${h.clipCount} clips · ${new Date(h.date).toLocaleDateString()}</span>
+                </div>
+            `).join('');
+        }
+    </script>
+</body>
+</html>
