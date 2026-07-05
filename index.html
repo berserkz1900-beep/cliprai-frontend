@@ -556,7 +556,20 @@ Return ONLY this exact JSON structure, no markdown:
 
                     <p style="font-size:0.75rem;color:#888;margin-top:15px">📅 Best post time: ${clip.bestPostTime}<br>💡 ${clip.platformTip}</p>
 
-                    <button class="btn btn-primary" onclick="generateClip(${state.currentClipIdx})" id="gen-btn-${clip.id}">🎬 GENERATE CLIP VIDEO</button>
+                    <div class="box" style="margin-top:15px">
+                        <strong>📱 HOW TO GET THIS CLIP:</strong>
+                        <ol style="font-size:0.8rem;color:#ccc;padding-left:20px;margin:10px 0">
+                            <li>Play the video, skip to <strong style="color:var(--accent)">${clip.segment.timestamp.split(' - ')[0]}</strong></li>
+                            <li>Start your phone's screen recorder (with audio on)</li>
+                            <li>Stop recording at <strong style="color:var(--accent)">${clip.segment.timestamp.split(' - ')[1]}</strong></li>
+                            <li>Upload that recording below</li>
+                        </ol>
+                    </div>
+
+                    <label style="margin-top:10px">Upload Your Screen Recording</label>
+                    <input type="file" accept="video/*" id="upload-input-${clip.id}" style="margin-bottom:10px">
+
+                    <button class="btn btn-primary" onclick="uploadClip(${state.currentClipIdx})" id="gen-btn-${clip.id}">🎬 ADD CAPTIONS & CONVERT</button>
                     <div id="clip-output-${clip.id}"></div>
                 </div>
             `;
@@ -570,29 +583,30 @@ Return ONLY this exact JSON structure, no markdown:
             document.getElementById(id).classList.add('active');
         }
 
-        async function generateClip(idx) {
+        async function uploadClip(idx) {
             const clip = state.clips[idx];
+            const fileInput = document.getElementById(`upload-input-${clip.id}`);
             const btn = document.getElementById(`gen-btn-${clip.id}`);
             const output = document.getElementById(`clip-output-${clip.id}`);
+
+            if (!fileInput.files || !fileInput.files[0]) {
+                return alert("Choose your screen recording file first");
+            }
+
             btn.disabled = true;
-            btn.innerHTML = '<span class="loading-spinner"></span> RENDERING...';
-            output.innerHTML = '<div class="progress-container"><div class="progress-fill" style="width:10%"></div></div><p style="font-size:0.75rem;color:#888;margin-top:5px">Starting job...</p>';
+            btn.innerHTML = '<span class="loading-spinner"></span> UPLOADING...';
+            output.innerHTML = '<div class="progress-container"><div class="progress-fill" style="width:10%"></div></div><p style="font-size:0.75rem;color:#888;margin-top:5px">Uploading video...</p>';
 
             try {
-                const res = await fetch(`${BACKEND_URL}/process`, {
+                const formData = new FormData();
+                formData.append('video', fileInput.files[0]);
+                formData.append('captions', JSON.stringify(clip.captions));
+                formData.append('hookText', clip.hookText);
+                formData.append('subHook', clip.subHook);
+
+                const res = await fetch(`${BACKEND_URL}/process-upload`, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        url: document.getElementById('yt-url').value,
-                        videoId: state.videoId,
-                        segment: {
-                            startSeconds: clip.segment.startSeconds,
-                            endSeconds: clip.segment.endSeconds
-                        },
-                        captions: clip.captions,
-                        hookText: clip.hookText,
-                        subHook: clip.subHook
-                    })
+                    body: formData
                 });
                 const data = await res.json();
 
@@ -600,16 +614,16 @@ Return ONLY this exact JSON structure, no markdown:
                     throw new Error(data.error || 'Failed to start job');
                 }
 
-                await pollJobStatus(data.jobId, output, btn);
+                await pollJobStatus(data.jobId, output, btn, '🎬 ADD CAPTIONS & CONVERT');
 
             } catch (e) {
                 output.innerHTML = `<div class="box" style="color:#ff4444">❌ ${e.message || 'Connection failed to backend'}</div>`;
                 btn.disabled = false;
-                btn.innerHTML = '🎬 GENERATE CLIP VIDEO';
+                btn.innerHTML = '🎬 ADD CAPTIONS & CONVERT';
             }
         }
 
-        function pollJobStatus(jobId, output, btn) {
+        function pollJobStatus(jobId, output, btn, btnLabel) {
             return new Promise((resolve) => {
                 const interval = setInterval(async () => {
                     try {
@@ -625,13 +639,13 @@ Return ONLY this exact JSON structure, no markdown:
                                     <a href="${videoUrl}" download style="color:var(--accent)">⬇️ DOWNLOAD VIDEO</a>
                                 </div>`;
                             btn.disabled = false;
-                            btn.innerHTML = '🎬 GENERATE CLIP VIDEO';
+                            btn.innerHTML = btnLabel;
                             resolve();
                         } else if (job.status === 'error') {
                             clearInterval(interval);
                             output.innerHTML = `<div class="box" style="color:#ff4444">❌ ${job.error || 'Generation failed'}</div>`;
                             btn.disabled = false;
-                            btn.innerHTML = '🎬 GENERATE CLIP VIDEO';
+                            btn.innerHTML = btnLabel;
                             resolve();
                         } else {
                             const pct = job.progress || 10;
@@ -641,7 +655,7 @@ Return ONLY this exact JSON structure, no markdown:
                         clearInterval(interval);
                         output.innerHTML = `<div class="box" style="color:#ff4444">❌ Lost connection while checking status</div>`;
                         btn.disabled = false;
-                        btn.innerHTML = '🎬 GENERATE CLIP VIDEO';
+                        btn.innerHTML = btnLabel;
                         resolve();
                     }
                 }, 3000);
