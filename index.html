@@ -576,37 +576,76 @@ Return ONLY this exact JSON structure, no markdown:
             const output = document.getElementById(`clip-output-${clip.id}`);
             btn.disabled = true;
             btn.innerHTML = '<span class="loading-spinner"></span> RENDERING...';
-            output.innerHTML = '<div class="progress-container"><div class="progress-fill" style="width:40%"></div></div>';
+            output.innerHTML = '<div class="progress-container"><div class="progress-fill" style="width:10%"></div></div><p style="font-size:0.75rem;color:#888;margin-top:5px">Starting job...</p>';
 
             try {
-                const supadataKey = localStorage.getItem('supadata_key');
                 const res = await fetch(`${BACKEND_URL}/process`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         url: document.getElementById('yt-url').value,
-                        startSeconds: clip.segment.startSeconds,
-                        endSeconds: clip.segment.endSeconds,
+                        videoId: state.videoId,
+                        segment: {
+                            startSeconds: clip.segment.startSeconds,
+                            endSeconds: clip.segment.endSeconds
+                        },
                         captions: clip.captions,
-                        supadataKey
+                        hookText: clip.hookText,
+                        subHook: clip.subHook
                     })
                 });
                 const data = await res.json();
-                if (data.success && data.videoUrl) {
-                    output.innerHTML = `
-                        <div class="box">
-                            ✅ Clip ready!<br>
-                            <a href="${data.videoUrl}" download style="color:var(--accent)">⬇️ DOWNLOAD VIDEO</a>
-                        </div>`;
-                } else {
-                    output.innerHTML = `<div class="box" style="color:#ff4444">❌ ${data.error || 'Generation failed'}</div>`;
+
+                if (!data.success || !data.jobId) {
+                    throw new Error(data.error || 'Failed to start job');
                 }
+
+                await pollJobStatus(data.jobId, output, btn);
+
             } catch (e) {
-                output.innerHTML = `<div class="box" style="color:#ff4444">❌ Connection failed to backend</div>`;
-            } finally {
+                output.innerHTML = `<div class="box" style="color:#ff4444">❌ ${e.message || 'Connection failed to backend'}</div>`;
                 btn.disabled = false;
                 btn.innerHTML = '🎬 GENERATE CLIP VIDEO';
             }
+        }
+
+        function pollJobStatus(jobId, output, btn) {
+            return new Promise((resolve) => {
+                const interval = setInterval(async () => {
+                    try {
+                        const res = await fetch(`${BACKEND_URL}/status/${jobId}`);
+                        const job = await res.json();
+
+                        if (job.status === 'completed') {
+                            clearInterval(interval);
+                            const videoUrl = `${BACKEND_URL}${job.downloadUrl}`;
+                            output.innerHTML = `
+                                <div class="box">
+                                    ✅ Clip ready!<br>
+                                    <a href="${videoUrl}" download style="color:var(--accent)">⬇️ DOWNLOAD VIDEO</a>
+                                </div>`;
+                            btn.disabled = false;
+                            btn.innerHTML = '🎬 GENERATE CLIP VIDEO';
+                            resolve();
+                        } else if (job.status === 'error') {
+                            clearInterval(interval);
+                            output.innerHTML = `<div class="box" style="color:#ff4444">❌ ${job.error || 'Generation failed'}</div>`;
+                            btn.disabled = false;
+                            btn.innerHTML = '🎬 GENERATE CLIP VIDEO';
+                            resolve();
+                        } else {
+                            const pct = job.progress || 10;
+                            output.innerHTML = `<div class="progress-container"><div class="progress-fill" style="width:${pct}%"></div></div><p style="font-size:0.75rem;color:#888;margin-top:5px">${job.step || 'Processing...'}</p>`;
+                        }
+                    } catch (e) {
+                        clearInterval(interval);
+                        output.innerHTML = `<div class="box" style="color:#ff4444">❌ Lost connection while checking status</div>`;
+                        btn.disabled = false;
+                        btn.innerHTML = '🎬 GENERATE CLIP VIDEO';
+                        resolve();
+                    }
+                }, 3000);
+            });
         }
 
         function saveToHistory(title, videoId, clipCount) {
