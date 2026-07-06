@@ -163,6 +163,7 @@
         <div class="nav-btns">
             <span class="badge">CLAUDE AI</span>
             <button class="icon-btn" onclick="openModal('history-modal')">🕐</button>
+            <button class="icon-btn" onclick="openModal('notes-modal')">🧠</button>
             <button class="icon-btn" onclick="openModal('keys-modal')">🔑</button>
         </div>
     </header>
@@ -237,6 +238,20 @@
         </div>
     </div>
 
+    <div id="notes-modal" class="modal">
+        <div class="modal-content">
+            <h3>🧠 PATTERN NOTES</h3>
+            <p style="font-size:0.75rem;color:#888;margin-bottom:10px">
+                Jot down what you notice from top-performing clips in your niche (hooks that worked, hashtag styles, trending topics, etc). These get added as extra guidance the next time you search for viral clips.
+            </p>
+            <div class="input-group">
+                <textarea id="pattern-notes-input" rows="8" style="width:100%;background:var(--gray);border:1px solid var(--border);padding:14px;color:white;font-family:var(--font);border-radius:4px;outline:none;resize:vertical" placeholder="e.g. Clips starting with a shocking dollar amount are outperforming lately. 'POV' style hooks doing well on TikTok this week..."></textarea>
+            </div>
+            <button class="btn btn-primary" onclick="saveNotes()">SAVE NOTES</button>
+            <button class="btn btn-secondary" onclick="closeModal('notes-modal')">CLOSE</button>
+        </div>
+    </div>
+
     <div id="toast">Copied to clipboard!</div>
 
     <script>
@@ -255,6 +270,7 @@
 
         window.onload = () => {
             loadKeys();
+            loadNotes();
             setupPills();
             if (!localStorage.getItem('groq_key')) {
                 openModal('keys-modal');
@@ -281,6 +297,16 @@
             localStorage.setItem('supadata_key', document.getElementById('supadata-key-input').value);
             showToast("Keys saved!");
             closeModal('keys-modal');
+        }
+
+        function loadNotes() {
+            document.getElementById('pattern-notes-input').value = localStorage.getItem('pattern_notes') || '';
+        }
+
+        function saveNotes() {
+            localStorage.setItem('pattern_notes', document.getElementById('pattern-notes-input').value);
+            showToast("Notes saved!");
+            closeModal('notes-modal');
         }
 
         function openModal(id) { document.getElementById(id).style.display = 'block'; if(id==='history-modal') renderHistory(); }
@@ -405,6 +431,8 @@
             const context = keywordScan();
             const prompt = `You are the world's best viral short-form content editor for US/UK finance audiences on Instagram Reels and YouTube Shorts.
 
+Find BETWEEN 5 AND 10 separate viral clip opportunities from this video — as many distinct high-signal moments as the transcript genuinely supports, from different points in the video, not overlapping. Do not pad with weak clips just to hit a number; quality over quantity, but aim for the higher end of that range when the content supports it.
+
 For each clip, find ONE single continuous segment from the video — do not combine timestamps from different parts of the video. The segment's first 3-5 seconds must function as a strong hook on their own, and the segment must be a complete, coherent, self-contained moment from start to finish.
 
 US/UK PSYCHOLOGY TRIGGERS:
@@ -419,15 +447,17 @@ US/UK PSYCHOLOGY TRIGGERS:
 PLATFORM RULES:
 - Instagram: segment duration MUST be under 30 seconds total
 - YouTube: segment duration MUST be under 60 seconds total
-- Alternate platforms between clips
+- TikTok: segment duration MUST be under 60 seconds total
+- Rotate between all three platforms across the set of clips so it's a mix, not all one platform
 
 VIDEO DURATION: ${state.duration}
 ALL timestamps MUST be within video duration and MUST form one continuous, uninterrupted window (endSeconds - startSeconds = totalSeconds, no gaps).
-
+Each clip's segment must come from a DIFFERENT part of the video — do not reuse or overlap timestamp ranges across clips.
+${localStorage.getItem('pattern_notes') ? `\nADDITIONAL GUIDANCE FROM RECENT CREATOR RESEARCH (weigh this heavily when judging what's likely to perform well right now):\n${localStorage.getItem('pattern_notes')}\n` : ''}
 Here are the high-signal moments found in the transcript, with surrounding context:
 ${context}
 
-Return ONLY this exact JSON structure, no markdown:
+Return ONLY this exact JSON structure, no markdown. Include one object per clip inside the "clips" array — 5 to 10 total objects, each following this same shape:
 {
   "videoTitle": "${state.title.replace(/"/g, "'")}",
   "clips": [
@@ -456,6 +486,25 @@ Return ONLY this exact JSON structure, no markdown:
       "capcut": "numbered step by step assembly instructions",
       "bestPostTime": "7:30 AM NPT",
       "platformTip": "one tip for US/UK reach on this platform"
+    },
+    {
+      "id": 2,
+      "platform": "YOUTUBE",
+      "emotion": "...",
+      "trigger": "...",
+      "viralScore": 8,
+      "whyViral": "...",
+      "totalSeconds": 45,
+      "hookText": "...",
+      "subHook": "...",
+      "segment": { "timestamp": "MM:SS - MM:SS", "startSeconds": 120, "endSeconds": 165, "durationSeconds": 45, "text": "...", "what": "..." },
+      "captions": ["...","...","...","...","...","...","...","..."],
+      "instagramCaption": "...",
+      "hashtags": ["...","...","...","..."],
+      "youtubeTitle": "...",
+      "capcut": "...",
+      "bestPostTime": "...",
+      "platformTip": "..."
     }
   ]
 }`;
@@ -469,7 +518,8 @@ Return ONLY this exact JSON structure, no markdown:
                     },
                     body: JSON.stringify({
                         model: 'llama-3.3-70b-versatile',
-                        messages: [{ role: 'user', content: prompt }]
+                        messages: [{ role: 'user', content: prompt }],
+                        max_tokens: 8000
                     })
                 });
                 const data = await res.json();
