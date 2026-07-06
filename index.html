@@ -208,7 +208,7 @@
         </div>
 
         <div id="screen-results" class="hidden">
-            <button class="btn btn-secondary" onclick="showScreen('input')" style="width: auto; padding: 8px 15px; margin-bottom: 15px;">← BACK</button>
+            <button class="btn btn-secondary" onclick="showScreen('input'); saveSession();" style="width: auto; padding: 8px 15px; margin-bottom: 15px;">← BACK</button>
             <div id="clip-tabs-container" class="clip-tabs"></div>
             <div id="active-clip-content"></div>
         </div>
@@ -276,6 +276,7 @@
                 openModal('keys-modal');
             }
             renderHistory();
+            restoreSession();
         };
 
         function setupPills() {
@@ -388,6 +389,7 @@
                     document.getElementById('topic-title').value = data.title;
                     updateStatus(`✅ SUCCESS: Loaded ${data.transcript.length} segments. Duration: ${Math.round(data.duration)}s`);
                     document.getElementById('find-clips-btn').disabled = false;
+                    saveSession(url);
                 } else {
                     updateStatus("❌ Error: " + data.error, true);
                 }
@@ -396,6 +398,55 @@
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = '📄 FETCH TRANSCRIPT';
+            }
+        }
+
+        // Persists everything needed to resume exactly where the user left off,
+        // since Android Chrome frequently kills background tabs and reloads them
+        // from scratch when the user switches away (e.g. to YouTube or GitHub).
+        function saveSession(url) {
+            try {
+                localStorage.setItem('clipr_session', JSON.stringify({
+                    ytUrl: url !== undefined ? url : document.getElementById('yt-url').value,
+                    transcript: state.transcript,
+                    duration: state.duration,
+                    title: state.title,
+                    videoId: state.videoId,
+                    clips: state.clips,
+                    currentClipIdx: state.currentClipIdx,
+                    screen: document.getElementById('screen-results').classList.contains('hidden') ? 'input' : 'results'
+                }));
+            } catch (e) {
+                console.error('Failed to save session', e);
+            }
+        }
+
+        function restoreSession() {
+            try {
+                const saved = JSON.parse(localStorage.getItem('clipr_session') || 'null');
+                if (!saved) return;
+
+                if (saved.ytUrl) document.getElementById('yt-url').value = saved.ytUrl;
+                if (saved.transcript) {
+                    state.transcript = saved.transcript;
+                    state.duration = saved.duration;
+                    state.title = saved.title;
+                    state.videoId = saved.videoId;
+                    document.getElementById('topic-title').value = saved.title || '';
+                    updateStatus(`✅ Restored previous session: ${saved.transcript.length} segments loaded`);
+                    document.getElementById('find-clips-btn').disabled = false;
+                }
+                if (saved.clips && saved.clips.length) {
+                    state.clips = saved.clips;
+                    state.currentClipIdx = saved.currentClipIdx || 0;
+                }
+                if (saved.screen === 'results' && state.clips.length) {
+                    renderClipTabs();
+                    renderActiveClip();
+                    showScreen('results');
+                }
+            } catch (e) {
+                console.error('Failed to restore session', e);
             }
         }
 
@@ -534,7 +585,8 @@ Return ONLY this exact JSON structure, no markdown. Include one object per clip 
 
                 state.clips = parsed.clips;
                 state.currentClipIdx = 0;
-                saveToHistory(state.title, state.videoId, parsed.clips.length);
+                saveToHistory(state.title, state.videoId, state.duration, parsed.clips);
+                saveSession();
 
                 renderClipTabs();
                 renderActiveClip();
@@ -561,6 +613,7 @@ Return ONLY this exact JSON structure, no markdown. Include one object per clip 
             state.currentClipIdx = idx;
             renderClipTabs();
             renderActiveClip();
+            saveSession();
         }
 
         function renderActiveClip() {
@@ -712,9 +765,18 @@ Return ONLY this exact JSON structure, no markdown. Include one object per clip 
             });
         }
 
-        function saveToHistory(title, videoId, clipCount) {
+        function saveToHistory(title, videoId, duration, clips) {
             const history = JSON.parse(localStorage.getItem('clip_history') || '[]');
-            history.unshift({ title, videoId, clipCount, date: new Date().toISOString() });
+            history.unshift({
+                id: Date.now().toString(),
+                title,
+                videoId,
+                duration,
+                clips,
+                clipCount: clips.length,
+                date: new Date().toISOString()
+            });
+            // Keep only the 20 most recent, and cap stored size by trimming oldest first
             localStorage.setItem('clip_history', JSON.stringify(history.slice(0, 20)));
         }
 
@@ -726,11 +788,28 @@ Return ONLY this exact JSON structure, no markdown. Include one object per clip 
                 return;
             }
             list.innerHTML = history.map(h => `
-                <div class="box">
+                <div class="box" style="cursor:pointer" onclick="openHistoryEntry('${h.id}')">
                     <strong>${h.title}</strong><br>
                     <span style="font-size:0.75rem;color:#888">${h.clipCount} clips · ${new Date(h.date).toLocaleDateString()}</span>
                 </div>
             `).join('');
+        }
+
+        function openHistoryEntry(id) {
+            const history = JSON.parse(localStorage.getItem('clip_history') || '[]');
+            const entry = history.find(h => h.id === id);
+            if (!entry) return;
+
+            state.title = entry.title;
+            state.videoId = entry.videoId;
+            state.duration = entry.duration || 0;
+            state.clips = entry.clips;
+            state.currentClipIdx = 0;
+
+            closeModal('history-modal');
+            renderClipTabs();
+            renderActiveClip();
+            showScreen('results');
         }
     </script>
 </body>
