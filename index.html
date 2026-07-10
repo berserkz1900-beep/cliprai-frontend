@@ -170,9 +170,20 @@
 
     <main id="app">
         <div id="screen-input">
-            <div class="input-group">
+            <div class="pill-box" id="source-mode-pills" style="margin-bottom: 15px;">
+                <div class="pill active" onclick="setSourceMode('youtube')" id="mode-pill-youtube">YouTube URL</div>
+                <div class="pill" onclick="setSourceMode('upload')" id="mode-pill-upload">Upload Video</div>
+            </div>
+
+            <div class="input-group" id="youtube-input-group">
                 <label>YouTube URL</label>
                 <input type="text" id="yt-url" placeholder="https://youtube.com/watch?v=..." oninput="autoFetchIfValid(this.value)">
+            </div>
+
+            <div class="input-group hidden" id="upload-input-group">
+                <label>Upload Video (max 1GB)</label>
+                <input type="file" id="video-upload-input" accept="video/*" onchange="onVideoFileSelected(this.files[0])">
+                <div id="upload-filename" style="font-size: 0.75rem; color: #888; margin-top: 6px;"></div>
             </div>
 
             <button class="btn btn-secondary" id="fetch-btn" onclick="fetchTranscript()">📄 FETCH TRANSCRIPT</button>
@@ -281,11 +292,40 @@
 
         function setupPills() {
             document.querySelectorAll('.pill-box .pill').forEach(pill => {
+                if (pill.closest('#source-mode-pills')) return; // has its own dedicated handler
                 pill.onclick = () => {
                     pill.parentElement.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
                     pill.classList.add('active');
                 }
             });
+        }
+
+        // Tracks whether the user is fetching a transcript from a YouTube URL
+        // or from a video file they upload directly.
+        let sourceMode = 'youtube';
+        let selectedVideoFile = null;
+
+        function setSourceMode(mode) {
+            sourceMode = mode;
+            document.getElementById('mode-pill-youtube').classList.toggle('active', mode === 'youtube');
+            document.getElementById('mode-pill-upload').classList.toggle('active', mode === 'upload');
+            document.getElementById('youtube-input-group').classList.toggle('hidden', mode !== 'youtube');
+            document.getElementById('upload-input-group').classList.toggle('hidden', mode !== 'upload');
+        }
+
+        function onVideoFileSelected(file) {
+            selectedVideoFile = file || null;
+            const label = document.getElementById('upload-filename');
+            if (!file) { label.innerText = ''; return; }
+            const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+            if (file.size > 1024 * 1024 * 1024) {
+                label.style.color = '#ff4444';
+                label.innerText = `⚠️ ${file.name} (${sizeMB}MB) exceeds the 1GB limit`;
+                selectedVideoFile = null;
+            } else {
+                label.style.color = 'var(--accent)';
+                label.innerText = `✅ ${file.name} (${sizeMB}MB)`;
+            }
         }
 
         function loadKeys() {
@@ -364,6 +404,8 @@
         }
 
         async function fetchTranscript() {
+            if (sourceMode === 'upload') return fetchTranscriptFromUpload();
+
             const url = document.getElementById('yt-url').value;
             if (!url) return alert("Paste a URL first");
             
@@ -390,6 +432,50 @@
                     updateStatus(`✅ SUCCESS: Loaded ${data.transcript.length} segments. Duration: ${Math.round(data.duration)}s`);
                     document.getElementById('find-clips-btn').disabled = false;
                     saveSession(url);
+                } else {
+                    updateStatus("❌ Error: " + data.error, true);
+                }
+            } catch (e) {
+                updateStatus("❌ Connection failed to backend", true);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '📄 FETCH TRANSCRIPT';
+            }
+        }
+
+        // Transcribes an uploaded video file instead of a YouTube URL.
+        // Extracts audio server-side and runs it through Groq Whisper, then
+        // feeds the result into the exact same state/flow as the YouTube path
+        // so "FIND VIRAL CLIPS" works identically afterward.
+        async function fetchTranscriptFromUpload() {
+            if (!selectedVideoFile) return alert("Choose a video file first");
+
+            const btn = document.getElementById('fetch-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading-spinner"></span> UPLOADING & TRANSCRIBING (this can take a few minutes)...';
+            updateStatus("Uploading video and extracting audio for transcription...");
+
+            try {
+                const formData = new FormData();
+                formData.append('video', selectedVideoFile);
+
+                const res = await fetch(`${BACKEND_URL}/transcribe-upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    state.transcript = data.transcript;
+                    state.duration = data.duration;
+                    state.title = data.title;
+                    state.videoId = ''; // no YouTube videoId for uploads
+                    state.uploadedVideoId = data.uploadedVideoId; // reference for later manual clipping
+
+                    document.getElementById('topic-title').value = data.title;
+                    updateStatus(`✅ SUCCESS: Loaded ${data.transcript.length} segments. Duration: ${Math.round(data.duration)}s`);
+                    document.getElementById('find-clips-btn').disabled = false;
+                    saveSession();
                 } else {
                     updateStatus("❌ Error: " + data.error, true);
                 }
